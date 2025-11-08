@@ -1,5 +1,52 @@
 import re
 import razdel
+from razdel import sentenize
+import xml.etree.ElementTree as ET
+
+
+MAX_CHUNK_LENGTH = 800
+
+
+# --- КЛАСС ДЛЯ НАРЕЗКИ SSML ---
+class SSMLSplitter:
+    def __init__(self, max_len=MAX_CHUNK_LENGTH):
+        self.max_len = max_len; self.chunks = []; self._reset_current_chunk()
+    def _reset_current_chunk(self):
+        self.current_root = ET.Element('speak'); self.current_char_count = 0
+    def _finalize_chunk(self):
+        if self.current_char_count > 0: self.chunks.append(ET.tostring(self.current_root, encoding='unicode'))
+    def _rebuild_path(self, path):
+        parent = self.current_root
+        for tag, attribs in path: parent = ET.SubElement(parent, tag, attribs)
+        return parent
+    def _process_text(self, text, parent_element, path, is_tail=False):
+        if not text or not text.strip(): return
+        for sentence in [s.text for s in sentenize(text)]:
+            if self.current_char_count + len(sentence) > self.max_len and self.current_char_count > 0:
+                self._finalize_chunk(); self._reset_current_chunk(); parent_element = self._rebuild_path(path)
+            target_element = parent_element[-1] if is_tail and len(parent_element) > 0 else parent_element
+            if is_tail: target_element.tail = (target_element.tail or '') + sentence
+            else: target_element.text = (target_element.text or '') + sentence
+            self.current_char_count += len(sentence)
+    def _traverse(self, source_node, dest_parent, path):
+        new_node = ET.SubElement(dest_parent, source_node.tag, source_node.attrib)
+        current_path = path + [(source_node.tag, source_node.attrib)]
+        self._process_text(source_node.text, new_node, current_path)
+        for child in source_node:
+            self._traverse(child, new_node, current_path)
+            self._process_text(child.tail, new_node, current_path, is_tail=True)
+    def split(self, ssml_string: str):
+        self.chunks = []; self._reset_current_chunk()
+        try:
+            ssml_string = ssml_string.replace('xmlns="http://www.w3.org/2001/10/synthesis"', '')
+            source_root = ET.fromstring(f"<speak>{ssml_string}</speak>" if not ssml_string.strip().startswith('<speak>') else ssml_string)
+        except ET.ParseError as e: return [ssml_string]
+        for child in source_root:
+            self._traverse(child, self.current_root, [])
+            self._process_text(child.tail, self.current_root, [], is_tail=True)
+        self._finalize_chunk()
+        return self.chunks
+
 
 class TextChunker:
     """

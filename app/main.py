@@ -11,13 +11,14 @@ import torch
 from scipy.io.wavfile import write as write_wav
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
 # Импортируем нашу модель, локер и новый обработчик текста
 from .tts_model import tts_model, tts_lock
-from .text_processor import TextChunker
+from .text_processor import TextChunker, SSMLSplitter
 
 # Получаем экземпляр логгера для текущего модуля
 logger = logging.getLogger(__name__)
@@ -40,7 +41,6 @@ class TextToSpeechRequest(BaseModel):
 class SsmlToSpeechRequest(BaseModel):
     ssml_text: str = Field(..., 
                            min_length=10, 
-                           max_length=2000, 
                            title="SSML разметка",
                            description="Текст в формате SSML. Максимум 2000 символов.")
     speaker: str = Field("xenia", 
@@ -71,6 +71,15 @@ app = FastAPI(
     description="Простой API для синтеза русской речи с использованием Silero.",
     version="1.0.0",
     lifespan=lifespan
+)
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Разрешает запросы с любых сайтов
+    allow_credentials=True,
+    allow_methods=["*"],  # Разрешает все методы (POST, GET и т.д.)
+    allow_headers=["*"],  # Разрешает все заголовки
 )
 
 
@@ -188,29 +197,45 @@ def text_to_speech_endpoint(request: TextToSpeechRequest):
 def ssml_to_speech_endpoint(request: SsmlToSpeechRequest):
     SAMPLE_RATE = 48000
     try:
-        temp_file_path = f"{uuid.uuid4().hex}.ogg"
-        
-        with tts_lock:
-            audio_tensor = tts_model.process_ssml(
-                ssml_text=request.ssml_text,
-                speaker=request.speaker,
-                sample_rate=SAMPLE_RATE
-            )
-            
-        convert_to_ogg_opus(audio_tensor, SAMPLE_RATE, temp_file_path)
+        # 1. Нарезаем SSML на безопасные фрагменты
+        splitter = SSMLSplitter()
+        ssml_chunks = splitter.split(request.ssml_text)
 
-        cleanup_task = BackgroundTask(os.remove, path=temp_file_path)
+        if not ssml_chunks:
+            raise HTTPException(status_code=400, detail="SSML пуст или некорректен.")
+
+        all_audio_tensors = []
+        # 2. Синтезируем каждый фрагмент в цикле
+        with tts_lock:
+            for i, chunk in enumerate(ssml_chunks):
+                logger.info(f"Синтез SSML фрагмента {i+1}/{len(ssml_chunks)}: '{chunk[:70]}...'")
+                audio_tensor = tts_model.process_ssml(
+                    ssml_text=chunk,
+                    speaker=request.speaker,
+                    sample_rate=SAMPLE_RATE
+                )
+                all_audio_tensors.append(audio_tensor)
         
+        # 3. Склеиваем все аудио-фрагменты
+        if not all_audio_tensors:
+            raise HTTPException(status_code=500, detail="Не удалось сгенерировать аудио ни для одного из SSML-фрагментов.")
+        final_audio = torch.cat(all_audio_tensors)
+
+        # 4. Сохраняем и возвращаем финальный файл
+        temp_file_path = f"{uuid.uuid4().hex}.ogg"
+        convert_to_ogg_opus(final_audio, SAMPLE_RATE, temp_file_path)
+        
+        cleanup_task = BackgroundTask(os.remove, path=temp_file_path)
         return FileResponse(
-            path=temp_file_path,
-            media_type="audio/ogg",
+            path=temp_file_path, 
+            media_type="audio/ogg", 
             filename="speech_ssml.ogg",
             background=cleanup_task
         )
-        
+
     except ValueError:
-        logger.warning(f"ValueError от Silero для SSML-текста.")
-        raise HTTPException(status_code=400, detail="SSML-текст не может быть обработан моделью.")
+        logger.warning(f"ValueError от Silero для одного из SSML-фрагментов.")
+        raise HTTPException(status_code=400, detail="Один из SSML-фрагментов не может быть обработан моделью.")
     except Exception as e:
         logger.error(f"Ошибка в эндпоинте /tts/ssml: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
