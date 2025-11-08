@@ -20,14 +20,40 @@ class SSMLSplitter:
         for tag, attribs in path: parent = ET.SubElement(parent, tag, attribs)
         return parent
     def _process_text(self, text, parent_element, path, is_tail=False):
-        if not text or not text.strip(): return
+        """
+        Обрабатывает текстовый узел, разбивает на предложения и добавляет в текущий фрагмент,
+        корректно обрабатывая пробелы между предложениями.
+        """
+        if not text or not text.strip():
+            return
+
         for sentence in [s.text for s in sentenize(text)]:
+            # Если добавление нового предложения превысит лимит, завершаем текущий фрагмент
             if self.current_char_count + len(sentence) > self.max_len and self.current_char_count > 0:
-                self._finalize_chunk(); self._reset_current_chunk(); parent_element = self._rebuild_path(path)
+                self._finalize_chunk()
+                self._reset_current_chunk()
+                parent_element = self._rebuild_path(path)
+
+            # Определяем, к какому элементу добавлять текст
             target_element = parent_element[-1] if is_tail and len(parent_element) > 0 else parent_element
-            if is_tail: target_element.tail = (target_element.tail or '') + sentence
-            else: target_element.text = (target_element.text or '') + sentence
-            self.current_char_count += len(sentence)
+
+            if is_tail:
+                # Работаем с .tail (текст после закрывающего тега)
+                current_tail = target_element.tail or ''
+                # Добавляем пробел, если нужно
+                if current_tail and not current_tail.endswith(' '):
+                    current_tail += ' '
+                target_element.tail = current_tail + sentence
+            else:
+                # Работаем с .text (текст внутри тега)
+                current_text = target_element.text or ''
+                # Добавляем пробел, если нужно
+                if current_text and not current_text.endswith(' '):
+                    current_text += ' '
+                target_element.text = current_text + sentence
+
+            # Обновляем счетчик символов с учетом возможного пробела
+            self.current_char_count += len(sentence) + 1
     def _traverse(self, source_node, dest_parent, path):
         new_node = ET.SubElement(dest_parent, source_node.tag, source_node.attrib)
         current_path = path + [(source_node.tag, source_node.attrib)]

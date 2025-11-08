@@ -1,21 +1,21 @@
 import torch
 import threading
-import logging # <-- Добавили импорт
+import logging
 
-# --- 1. Потокобезопасная блокировка ---
+# Потокобезопасная блокировка для доступа к модели
 tts_lock = threading.Lock()
 
-# --- Получаем логгер для этого модуля ---
+# Получаем логгер для этого модуля
 logger = logging.getLogger(__name__)
 
 class SileroTTS:
     """
     Класс-обертка для управления моделью Silero TTS.
+    Обеспечивает загрузку модели и логирование запросов.
     """
     def __init__(self):
         self.model = None
         self.device = None
-        # Используем логгер вместо print
         logger.info("Экземпляр SileroTTS создан.")
 
     def load(self, language='ru', model_id='v5_ru', device_str='cpu'):
@@ -35,7 +35,6 @@ class SileroTTS:
             self.model = model
             logger.info("Модель Silero успешно загружена и готова к работе.")
         except Exception as e:
-            # Используем уровень CRITICAL для фатальных ошибок
             logger.critical(f"Критическая ошибка при загрузке модели: {e}", exc_info=True)
             raise
 
@@ -45,6 +44,8 @@ class SileroTTS:
         """
         if not self.model:
             raise RuntimeError("Модель не загружена. Вызовите метод .load() перед использованием.")
+
+        # logger.info(f"Processing text (len: {len(text)}): '{text[:70]}...' | speaker='{speaker}', sample_rate={sample_rate}, options={kwargs}")
 
         return self.model.apply_tts(text=text,
                                     speaker=speaker,
@@ -58,10 +59,12 @@ class SileroTTS:
         if not self.model:
             raise RuntimeError("Модель не загружена. Вызовите метод .load() перед использованием.")
             
+        # logger.info(f"Processing SSML (len: {len(ssml_text)}): '{ssml_text[:90]}...' | speaker='{speaker}', sample_rate={sample_rate}, options={kwargs}")
+        
         return self.model.apply_tts(ssml_text=ssml_text,
                                     speaker=speaker,
                                     sample_rate=sample_rate,
                                     **kwargs)
 
-# --- Глобальный экземпляр класса ---
+# --- Глобальный экземпляр класса, который будет использоваться во всем приложении ---
 tts_model = SileroTTS()

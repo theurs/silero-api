@@ -1,4 +1,4 @@
-# silero_cli.py (финальная версия с нарезкой и без дребезжания)
+# silero_cli.py (финальная версия с новыми параметрами и фиксом SSML)
 
 import os
 import argparse
@@ -17,11 +17,11 @@ import tarfile
 import xml.etree.ElementTree as ET
 
 # --- НАСТРОЙКИ ---
-MAX_CHUNK_LENGTH = 1000  # Увеличим лимит до более реалистичного
+MAX_CHUNK_LENGTH = 1000
 FFMPEG_EXE_NAME = 'ffmpeg.exe' if sys.platform == 'win32' else 'ffmpeg'
-MODEL_ID = 'v5_ru' # Используем актуальную модель v5
+MODEL_ID = 'v5_ru'
 
-# --- КЛАСС ДЛЯ НАРЕЗКИ SSML (из предыдущей рабочей версии) ---
+# --- КЛАСС ДЛЯ НАРЕЗКИ SSML (с исправленным _process_text) ---
 class SSMLSplitter:
     def __init__(self, max_len=MAX_CHUNK_LENGTH):
         self.max_len = max_len; self.chunks = []; self._reset_current_chunk()
@@ -33,15 +33,27 @@ class SSMLSplitter:
         parent = self.current_root
         for tag, attribs in path: parent = ET.SubElement(parent, tag, attribs)
         return parent
+    
+    # --- ИСПРАВЛЕННЫЙ МЕТОД ---
     def _process_text(self, text, parent_element, path, is_tail=False):
         if not text or not text.strip(): return
         for sentence in [s.text for s in sentenize(text)]:
             if self.current_char_count + len(sentence) > self.max_len and self.current_char_count > 0:
                 self._finalize_chunk(); self._reset_current_chunk(); parent_element = self._rebuild_path(path)
+            
             target_element = parent_element[-1] if is_tail and len(parent_element) > 0 else parent_element
-            if is_tail: target_element.tail = (target_element.tail or '') + sentence
-            else: target_element.text = (target_element.text or '') + sentence
-            self.current_char_count += len(sentence)
+            if is_tail:
+                current_tail = target_element.tail or ''
+                if current_tail and not current_tail.endswith(' '): current_tail += ' '
+                target_element.tail = current_tail + sentence
+            else:
+                current_text = target_element.text or ''
+                if current_text and not current_text.endswith(' '): current_text += ' '
+                target_element.text = current_text + sentence
+            
+            self.current_char_count += len(sentence) + 1
+    # --- КОНЕЦ ИСПРАВЛЕННОГО МЕТОДА ---
+
     def _traverse(self, source_node, dest_parent, path):
         new_node = ET.SubElement(dest_parent, source_node.tag, source_node.attrib)
         current_path = path + [(source_node.tag, source_node.attrib)]
@@ -61,7 +73,7 @@ class SSMLSplitter:
         self._finalize_chunk()
         return self.chunks
 
-# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
+# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (без изменений) ---
 def find_ffmpeg_path():
     local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), FFMPEG_EXE_NAME)
     if os.path.exists(local_path): return local_path
@@ -119,11 +131,18 @@ def convert_wav_to_ogg(wav_path, ogg_path, ffmpeg_path):
 def main():
     parser = argparse.ArgumentParser(description="Консольная утилита для синтеза речи Silero TTS.")
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--text", type=str, help="Текст для синтеза."); group.add_argument("--file", type=str, help="Путь к текстовому файлу.")
+    group.add_argument("--text", type=str, help="Текст для синтеза.")
+    group.add_argument("--file", type=str, help="Путь к текстовому файлу.")
     group.add_argument("--ssml", type=str, help="Путь к файлу с SSML-разметкой.")
     parser.add_argument("--save", type=str, required=True, help="Путь для сохранения аудио (.wav или .ogg).")
     parser.add_argument("--speaker", type=str, default="xenia", help="Голос (aidar, baya, kseniya, xenia, eugene, random).")
     parser.add_argument("--sample_rate", type=int, default=48000, choices=[8000, 24000, 48000], help="Частота дискретизации.")
+    # --- НОВЫЕ ПАРАМЕТРЫ ---
+    # Используем BooleanOptionalAction для создания флагов --enable/--disable, но для простоты можно использовать action='store_true'
+    parser.add_argument('--put_accent', default=True, type=lambda x: (str(x).lower() == 'true'), help="Расставлять ударения (True/False)")
+    parser.add_argument('--put_yo', default=True, type=lambda x: (str(x).lower() == 'true'), help="Расставлять букву ё (True/False)")
+    parser.add_argument('--put_stress_homo', default=True, type=lambda x: (str(x).lower() == 'true'), help="Ударения в омографах (True/False)")
+    parser.add_argument('--put_yo_homo', default=True, type=lambda x: (str(x).lower() == 'true'), help="Буква ё в омографах (True/False)")
     args = parser.parse_args()
 
     try:
@@ -136,7 +155,7 @@ def main():
         else: input_data = args.text; is_ssml = False; print("[*] Используется текст из командной строки.")
     except FileNotFoundError as e: print(f"[ERROR] Файл не найден: {e.filename}"); return
     
-    model = download_model();
+    model = download_model()
     if not model: return
 
     if is_ssml: chunks = SSMLSplitter().split(input_data)
@@ -144,7 +163,6 @@ def main():
     if not chunks: print("[ERROR] Не удалось получить фрагменты для синтеза."); return
     
     audio_tensors = []
-    # Создаем тензор тишины для плавной склейки
     silence_duration_ms = 250
     silence_tensor = torch.zeros(int(args.sample_rate * silence_duration_ms / 1000))
 
@@ -152,13 +170,23 @@ def main():
     for i, chunk in enumerate(chunks):
         print(f"    - Синтез фрагмента {i+1}/{len(chunks)}...")
         try:
-            params = {'speaker': args.speaker, 'sample_rate': args.sample_rate}
-            if is_ssml: params['ssml_text'] = chunk
-            else: params.update({'text': chunk, 'put_accent': True, 'put_yo': True, 'put_stress_homo': True, 'put_yo_homo': True})
+            # --- ОБНОВЛЕННЫЙ БЛОК ПАРАМЕТРОВ ---
+            params = {
+                'speaker': args.speaker, 
+                'sample_rate': args.sample_rate,
+                'put_accent': args.put_accent,
+                'put_yo': args.put_yo,
+                'put_stress_homo': args.put_stress_homo,
+                'put_yo_homo': args.put_yo_homo
+            }
+            if is_ssml: 
+                params['ssml_text'] = chunk
+            else: 
+                params['text'] = chunk
             
             audio = model.apply_tts(**params)
             audio_tensors.append(audio)
-            if i < len(chunks) - 1: audio_tensors.append(silence_tensor) # Добавляем тишину между фрагментами
+            if i < len(chunks) - 1: audio_tensors.append(silence_tensor)
         except Exception as e: print(f"[WARNING] Ошибка при синтезе фрагмента {i+1}: {e}")
     
     if not audio_tensors: print("[ERROR] Не удалось синтезировать ни одного аудиофрагмента."); return

@@ -80,18 +80,19 @@
         }
         .settings-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
             gap: 20px;
         }
         .checkbox-group {
             display: flex;
             flex-direction: column;
-            gap: 10px;
+            gap: 12px;
             padding-top: 29px; /* Align with select label */
         }
         .checkbox-item {
             display: flex;
             align-items: center;
+            cursor: pointer;
         }
         .checkbox-item input {
             margin-right: 10px;
@@ -172,15 +173,11 @@
                 </select>
             </div>
             <div class="checkbox-group">
-                <label class="checkbox-item">
-                    <input type="checkbox" id="put-accent-checkbox" checked> Расставлять ударения
-                </label>
-                <label class="checkbox-item">
-                    <input type="checkbox" id="put-yo-checkbox" checked> Использовать букву «ё»
-                </label>
-                <label class="checkbox-item">
-                    <input type="checkbox" id="is-ssml-checkbox"> Это SSML-разметка
-                </label>
+                <label class="checkbox-item"><input type="checkbox" id="put-accent-checkbox" checked> Расставлять ударения</label>
+                <label class="checkbox-item"><input type="checkbox" id="put-yo-checkbox" checked> Использовать букву «ё»</label>
+                <label class="checkbox-item" title="Например, в слове 'з+амок' или 'зам+ок'"><input type="checkbox" id="put-stress-homo-checkbox" checked> Ударения в омографах</label>
+                <label class="checkbox-item" title="Например, 'все' -> 'всё'"><input type="checkbox" id="put-yo-homo-checkbox" checked> Буква «ё» в омографах</label>
+                <label class="checkbox-item"><input type="checkbox" id="is-ssml-checkbox"> Это SSML-разметка</label>
             </div>
         </div>
     </fieldset>
@@ -207,6 +204,8 @@
     const putAccentCheckbox = document.getElementById('put-accent-checkbox');
     const putYoCheckbox = document.getElementById('put-yo-checkbox');
     const isSsmlCheckbox = document.getElementById('is-ssml-checkbox');
+    const putStressHomoCheckbox = document.getElementById('put-stress-homo-checkbox');
+    const putYoHomoCheckbox = document.getElementById('put-yo-homo-checkbox');
     const ttsButton = document.getElementById('tts-button');
     const statusEl = document.getElementById('status');
     const resultContainer = document.getElementById('result-container');
@@ -217,11 +216,8 @@
     fileInput.addEventListener('change', (event) => {
         const file = event.target.files[0];
         if (!file) return;
-
         const reader = new FileReader();
-        reader.onload = (e) => {
-            textInput.value = e.target.result;
-        };
+        reader.onload = (e) => { textInput.value = e.target.result; };
         reader.readAsText(file);
     });
     
@@ -234,36 +230,31 @@
             return;
         }
 
-        // 1. Обновляем UI перед отправкой запроса
         ttsButton.disabled = true;
         statusEl.textContent = "Идет синтез, пожалуйста, подождите...";
         statusEl.style.color = "var(--text-color)";
         resultContainer.style.display = 'none';
 
-        // 2. Готовим данные для запроса
         const isSsml = isSsmlCheckbox.checked;
-        const speaker = speakerSelect.value;
-        
         let endpoint = '';
         let payload = {};
+        
+        const commonPayload = {
+            speaker: speakerSelect.value,
+            put_accent: putAccentCheckbox.checked,
+            put_yo: putYoCheckbox.checked,
+            put_stress_homo: putStressHomoCheckbox.checked,
+            put_yo_homo: putYoHomoCheckbox.checked
+        };
 
         if (isSsml) {
             endpoint = '/tts/ssml';
-            payload = {
-                ssml_text: text,
-                speaker: speaker
-            };
+            payload = { ssml_text: text, ...commonPayload };
         } else {
             endpoint = '/tts/text';
-            payload = {
-                text: text,
-                speaker: speaker,
-                put_accent: putAccentCheckbox.checked,
-                put_yo: putYoCheckbox.checked
-            };
+            payload = { text: text, ...commonPayload };
         }
 
-        // 3. Отправляем запрос на сервер
         try {
             const response = await fetch(API_URL + endpoint, {
                 method: 'POST',
@@ -276,7 +267,6 @@
                 throw new Error(errorData.detail || `Ошибка сервера: ${response.status}`);
             }
 
-            // 4. Обрабатываем успешный ответ
             const audioBlob = await response.blob();
             const audioUrl = URL.createObjectURL(audioBlob);
 
@@ -288,12 +278,10 @@
             resultContainer.style.display = 'block';
 
         } catch (error) {
-            // 5. Обрабатываем ошибку
             statusEl.textContent = `Критическая ошибка: ${error.message}`;
             statusEl.style.color = "var(--error-color)";
             console.error("Fetch error:", error);
         } finally {
-            // 6. Возвращаем кнопку в активное состояние
             ttsButton.disabled = false;
         }
     });
