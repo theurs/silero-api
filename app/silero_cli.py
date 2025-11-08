@@ -1,5 +1,4 @@
 # silero_cli.py (финальная версия с нарезкой и без дребезжания)
-# pyinstaller --onefile --name silero_cli silero_cli.py
 
 import os
 import argparse
