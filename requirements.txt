@@ -1,0 +1,26 @@
+# --- Веб-сервер и API ---
+fastapi
+uvicorn[standard]
+
+# --- Машинное обучение и TTS ---
+torch
+silero
+
+# --- Обработка аудио и данных ---
+numpy
+scipy
+
+# --- Pydantic используется FastAPI, но лучше указать явно ---
+pydantic
+
+# Silero
+omegaconf
+
+
+razdel
+
+requests
+
+tqdm
+
+pyinstaller

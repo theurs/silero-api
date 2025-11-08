@@ -1,0 +1,42 @@
+version: 1
+disable_existing_loggers: false
+
+# Formatters define the structure of the log messages.
+formatters:
+  default:
+    format: "%(asctime)s - %(levelname)s - %(name)s - %(message)s"
+
+# Handlers define where the log messages are sent.
+handlers:
+  file:
+    # Use a handler that rotates log files when they reach a certain size.
+    class: "logging.handlers.RotatingFileHandler"
+    # The file where ALL logs will be written.
+    filename: "app.log"
+    # File encoding.
+    encoding: "utf-8"
+    # The formatter to use for this handler.
+    formatter: "default"
+    # Max file size in bytes (5 MB).
+    maxBytes: 5242880
+    # Number of old log files to keep.
+    backupCount: 5
+
+# Loggers are the sources of the log messages.
+loggers:
+  # Configure the Uvicorn access logger.
+  uvicorn.access:
+    level: "INFO"
+    handlers: ["file"]
+    propagate: false
+
+  # Configure the Uvicorn error logger.
+  uvicorn.error:
+    level: "INFO"
+    handlers: ["file"]
+    propagate: false
+
+# The root logger catches all messages from our application code.
+root:
+  level: "INFO"
+  handlers: ["file"]
